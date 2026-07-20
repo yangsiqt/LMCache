@@ -37,6 +37,11 @@ from lmcache.integration.vllm.utils import (
     lmcache_get_or_create_config,
 )
 from lmcache.integration.vllm.vllm_service_factory import VllmServiceFactory
+from lmcache.integration.vllm.workload_aware import (
+    WorkloadAwareRequest,
+    WorkloadAwareResultTracker,
+    decide_retrieve,
+)
 from lmcache.logging import init_logger
 from lmcache.observability import LMCStatsMonitor, PrometheusLogger
 from lmcache.utils import CacheStoreEvent, _lmcache_nvtx_annotate, cdiv
@@ -579,6 +584,7 @@ class LMCacheConnectorV1Impl:
 
         self.force_skip_save = bool(os.environ.get("LMCACHE_FORCE_SKIP_SAVE", False))
         self._requests_priority: dict[str, int] = {}
+        self._workload_aware_results = WorkloadAwareResultTracker()
 
         # Chunked KV loading: cap the number of external tokens
         # reported per scheduling step to prevent GPU block pool
@@ -1390,10 +1396,52 @@ class LMCacheConnectorV1Impl:
 
         req_id = request.request_id
 
+        kv_transfer_params = getattr(request, "kv_transfer_params", None)
+        try:
+            workload_control = WorkloadAwareRequest.from_kv_transfer_params(
+                kv_transfer_params
+            )
+        except ValueError as error:
+            logger.warning(
+                "Ignoring invalid workload-aware controls for request %s: %s",
+                req_id,
+                error,
+            )
+            workload_control = None
+
+        if workload_control is not None:
+            self._workload_aware_results.begin(
+                req_id, workload_control, num_computed_tokens
+            )
+            if workload_control.retrieve_mode == "skip":
+                retrieve_decision = decide_retrieve(
+                    workload_control,
+                    self.config.min_retrieve_tokens,
+                    0,
+                )
+                self._workload_aware_results.record_decision(
+                    req_id, retrieve_decision, 0
+                )
+                logger.info(
+                    "Reqid: %s, workload-aware Router selected recompute/local HBM; "
+                    "skip external lookup",
+                    req_id,
+                )
+                return 0
+
         # Degraded mode (LMCache init failed): no lookup client is available, so
         # report no external hits and let vLLM recompute instead of asserting and
         # crashing EngineCore during scheduling.
         if self.lookup_client is None:
+            if workload_control is not None:
+                retrieve_decision = decide_retrieve(
+                    workload_control,
+                    self.config.min_retrieve_tokens,
+                    0,
+                )
+                self._workload_aware_results.record_decision(
+                    req_id, retrieve_decision, 0
+                )
             return 0
 
         if (
@@ -1407,6 +1455,8 @@ class LMCacheConnectorV1Impl:
             )
         else:
             logger.debug(f"Looking up cache for the first time for request {req_id}!")
+            if workload_control is not None:
+                self._workload_aware_results.start_lookup(req_id)
             self._requests_priority[req_id] = getattr(request, "priority", 0)
 
             # token_ids = request.prompt_token_ids
@@ -1454,8 +1504,20 @@ class LMCacheConnectorV1Impl:
         # Check if hit tokens meet the minimum for retrieve
         # If below minimum, skip retrieve but still record hit tokens
         # for skip_leading_tokens to avoid re-storing existing chunks
-        min_retrieve = self.config.min_retrieve_tokens
-        below_min_retrieve = min_retrieve > 0 and need_to_allocate < min_retrieve
+        if workload_control is not None:
+            retrieve_decision = decide_retrieve(
+                workload_control,
+                self.config.min_retrieve_tokens,
+                need_to_allocate,
+            )
+            min_retrieve = retrieve_decision.min_retrieve_tokens
+            below_min_retrieve = not retrieve_decision.should_retrieve
+            self._workload_aware_results.record_decision(
+                req_id, retrieve_decision, num_external_hit_tokens
+            )
+        else:
+            min_retrieve = self.config.min_retrieve_tokens
+            below_min_retrieve = min_retrieve > 0 and need_to_allocate < min_retrieve
 
         if below_min_retrieve:
             logger.info(
@@ -1580,6 +1642,7 @@ class LMCacheConnectorV1Impl:
         if num_external_tokens == 0:
             # No need to load anything
             self.load_specs[request.request_id].can_load = False
+            self._workload_aware_results.record_scheduled_load(request.request_id, 0)
             return
 
         recalc_last = (
@@ -1607,6 +1670,9 @@ class LMCacheConnectorV1Impl:
         )
 
         self.load_specs[request.request_id].can_load = True
+        self._workload_aware_results.record_scheduled_load(
+            request.request_id, num_external_tokens
+        )
 
     @_lmcache_nvtx_annotate
     def build_connector_meta(
@@ -1932,6 +1998,16 @@ class LMCacheConnectorV1Impl:
                 return_params["num_lmcache_cached_tokens"] = (
                     request_tracker.num_lmcache_cached_tokens
                 )
+
+        result_tracker = getattr(self, "_workload_aware_results", None)
+        if result_tracker is not None:
+            workload_result = result_tracker.finish(
+                request.request_id,
+                aborted=request.status == RequestStatus.FINISHED_ABORTED,
+            )
+            if workload_result is not None:
+                return_params = return_params or {}
+                return_params["workload_aware_result"] = workload_result
 
         return False, return_params
 
