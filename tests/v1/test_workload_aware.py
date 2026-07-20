@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -64,6 +65,20 @@ def test_result_tracker_reports_known_values_without_fabricating_timings() -> No
     assert result["lookup_ms"] == pytest.approx(25)
     assert result["load_ms"] is None
     assert result["transfer_bytes"] is None
+
+
+def test_result_tracker_writes_async_connector_trace(tmp_path) -> None:
+    path = tmp_path / "connector.jsonl"
+    tracker = WorkloadAwareResultTracker(trace_path=path)
+    control = WorkloadAwareRequest.from_kv_transfer_params(controls("skip"))
+    assert control is not None
+    tracker.begin("request-1", control, 0)
+    tracker.record_decision("request-1", decide_retrieve(control, 0, 0), 0)
+    assert tracker.finish("request-1") is not None
+    tracker.close()
+    row = json.loads(path.read_text(encoding="utf-8"))
+    assert row["request_id"] == "request-1"
+    assert row["actual_kv_path"] == "recompute"
 
 
 class FakeLookupClient:

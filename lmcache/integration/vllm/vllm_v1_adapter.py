@@ -1355,6 +1355,7 @@ class LMCacheConnectorV1Impl:
     def shutdown(self):
         """Shutdown the connector by delegating to LMCacheManager."""
         logger.info("Starting LMCacheConnector shutdown...")
+        self._workload_aware_results.close()
         self._manager.stop_services()
 
     ###################

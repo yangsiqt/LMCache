@@ -3,9 +3,13 @@
 
 from __future__ import annotations
 
+import json
+import os
+import queue
 import threading
 import time
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any, Callable, Literal
 
 RetrieveMode = Literal["auto", "force", "skip"]
@@ -102,11 +106,52 @@ class WorkloadAwareResult:
 class WorkloadAwareResultTracker:
     """Thread-safe lifecycle state shared by scheduler callbacks."""
 
-    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+    _STOP = object()
+
+    def __init__(
+        self,
+        clock: Callable[[], float] = time.monotonic,
+        trace_path: str | Path | None = None,
+    ) -> None:
         self._clock = clock
         self._results: dict[str, WorkloadAwareResult] = {}
         self._lookup_started: dict[str, float] = {}
         self._lock = threading.Lock()
+        configured_path = trace_path or os.getenv("LMCACHE_WORKLOAD_AWARE_TRACE_PATH")
+        self._trace_path = Path(configured_path) if configured_path else None
+        self._trace_queue: queue.Queue[dict[str, Any] | object] | None = None
+        self._trace_thread: threading.Thread | None = None
+        if self._trace_path is not None:
+            self._trace_path.parent.mkdir(parents=True, exist_ok=True)
+            self._trace_queue = queue.Queue(maxsize=10000)
+            self._trace_thread = threading.Thread(
+                target=self._write_traces,
+                name="lmcache-workload-trace",
+                daemon=True,
+            )
+            self._trace_thread.start()
+
+    def _write_traces(self) -> None:
+        assert self._trace_path is not None and self._trace_queue is not None
+        with self._trace_path.open("a", encoding="utf-8") as handle:
+            while True:
+                row = self._trace_queue.get()
+                try:
+                    if row is self._STOP:
+                        return
+                    handle.write(json.dumps(row, sort_keys=True) + "\n")
+                    handle.flush()
+                finally:
+                    self._trace_queue.task_done()
+
+    def _trace(self, result: dict[str, Any]) -> None:
+        if self._trace_queue is None:
+            return
+        try:
+            self._trace_queue.put_nowait(result)
+        except queue.Full:
+            # The result is still returned to vLLM; trace pressure must not fail serving.
+            pass
 
     def begin(
         self,
@@ -173,4 +218,15 @@ class WorkloadAwareResultTracker:
                 return None
             if aborted:
                 result.fallback_reason = result.fallback_reason or "request_aborted"
-            return result.to_dict()
+            output = result.to_dict()
+        self._trace(output)
+        return output
+
+    def close(self) -> None:
+        if self._trace_queue is None or self._trace_thread is None:
+            return
+        self._trace_queue.join()
+        self._trace_queue.put(self._STOP)
+        self._trace_thread.join(timeout=5)
+        self._trace_queue = None
+        self._trace_thread = None
