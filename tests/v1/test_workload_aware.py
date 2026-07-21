@@ -9,6 +9,7 @@ from lmcache.integration.vllm.workload_aware import (
     WorkloadAwareRequest,
     WorkloadAwareResultTracker,
     decide_retrieve,
+    record_actual_retrieve,
 )
 
 
@@ -136,3 +137,49 @@ def test_adapter_skip_avoids_lookup_and_force_bypasses_global_threshold() -> Non
     assert auto.get_num_new_matched_tokens(request("auto"), 0) == 0
     per_request = connector(128)
     assert per_request.get_num_new_matched_tokens(request("auto", 64), 0) == 128
+
+
+def test_actual_retrieve_trace_distinguishes_l1_and_l2(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "actual.jsonl"
+    monkeypatch.setenv("LMCACHE_WORKLOAD_AWARE_ACTUAL_TRACE_PATH", str(path))
+    record_actual_retrieve(
+        request_id="l1",
+        storage_locations=["LocalCPUBackend"],
+        retrieved_tokens=256,
+        transfer_bytes=1024,
+        load_ms=2.5,
+    )
+    record_actual_retrieve(
+        request_id="l2",
+        storage_locations=["RemoteBackend"],
+        retrieved_tokens=512,
+        transfer_bytes=2048,
+        load_ms=8.0,
+    )
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert [row["actual_kv_path"] for row in rows] == [
+        "lmcache_l1",
+        "mooncake_l2",
+    ]
+
+
+def test_extract_request_configs_forwards_trace_identity() -> None:
+    from lmcache.integration.vllm.vllm_v1_adapter import extract_request_configs
+
+    sampling = SimpleNamespace(
+        extra_args={
+            "kv_transfer_params": {
+                "workload_aware": {
+                    "request_id": "client-request",
+                    "session_id": "session",
+                    "trace_id": "client-request:0",
+                    "retrieve_mode": "force",
+                }
+            }
+        }
+    )
+    assert extract_request_configs(sampling) == {
+        "lmcache.workload_aware.request_id": "client-request",
+        "lmcache.workload_aware.session_id": "session",
+        "lmcache.workload_aware.trace_id": "client-request:0",
+    }

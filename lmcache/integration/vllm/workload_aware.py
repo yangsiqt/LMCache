@@ -16,6 +16,51 @@ RetrieveMode = Literal["auto", "force", "skip"]
 _VALID_RETRIEVE_MODES = {"auto", "force", "skip"}
 
 
+def record_actual_retrieve(
+    *,
+    request_id: str,
+    storage_locations: list[str],
+    retrieved_tokens: int,
+    transfer_bytes: int,
+    load_ms: float,
+) -> None:
+    """Append worker-observed retrieval evidence for experiment trace joins."""
+    trace_path = os.getenv("LMCACHE_WORKLOAD_AWARE_ACTUAL_TRACE_PATH")
+    if not trace_path or not request_id:
+        return
+    locations = sorted(set(storage_locations))
+    if not locations or retrieved_tokens <= 0:
+        actual_path = "recompute"
+    elif locations == ["LocalCPUBackend"]:
+        actual_path = "lmcache_l1"
+    elif all(
+        location == "RemoteBackend" or "mooncake" in location.lower()
+        for location in locations
+    ):
+        actual_path = "mooncake_l2"
+    else:
+        actual_path = "mixed_external"
+    row = {
+        "schema_version": "1.0",
+        "event_type": "actual_retrieve",
+        "request_id": request_id,
+        "actual_kv_path": actual_path,
+        "storage_locations": locations,
+        "retrieved_tokens": max(0, int(retrieved_tokens)),
+        "transfer_bytes": max(0, int(transfer_bytes)),
+        "load_ms": max(0.0, float(load_ms)),
+        "recorded_at": time.time(),
+    }
+    path = Path(trace_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = (json.dumps(row, sort_keys=True) + "\n").encode()
+    descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
+    try:
+        os.write(descriptor, payload)
+    finally:
+        os.close(descriptor)
+
+
 @dataclass(frozen=True)
 class WorkloadAwareRequest:
     retrieve_mode: RetrieveMode = "auto"
@@ -150,7 +195,7 @@ class WorkloadAwareResultTracker:
         try:
             self._trace_queue.put_nowait(result)
         except queue.Full:
-            # The result is still returned to vLLM; trace pressure must not fail serving.
+            # The result still reaches vLLM; trace pressure must not fail serving.
             pass
 
     def begin(

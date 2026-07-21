@@ -29,6 +29,7 @@ import torch
 
 # First Party
 from lmcache import torch_dev, torch_device_type
+from lmcache.integration.vllm.workload_aware import record_actual_retrieve
 from lmcache.logging import init_logger
 from lmcache.observability import LMCacheStatsLogger, LMCStatsMonitor
 from lmcache.usage_telemetry import InitializeUsageContext
@@ -817,6 +818,7 @@ class LMCacheEngine:
         req_id = self._get_req_id(kwargs)
 
         tot_kv_size = 0
+        retrieval_locations: list[str] = []
 
         if mask is not None:
             num_required_tokens = torch.sum(mask).item()
@@ -843,6 +845,7 @@ class LMCacheEngine:
                         tokens,
                         mask,
                         ret_mask,
+                        _workload_retrieval_locations=retrieval_locations,
                         **kwargs,
                     )
                 else:
@@ -850,6 +853,7 @@ class LMCacheEngine:
                         tokens,
                         mask,
                         ret_mask,
+                        _workload_retrieval_locations=retrieval_locations,
                         **kwargs,
                     )
 
@@ -942,6 +946,17 @@ class LMCacheEngine:
             retrieved_tokens,
         )
         onload_time = retrieve_stats.time_to_retrieve()
+        request_configs = kwargs.get("request_configs") or {}
+        trace_request_id = request_configs.get(
+            "lmcache.workload_aware.request_id", req_id
+        )
+        record_actual_retrieve(
+            request_id=str(trace_request_id),
+            storage_locations=retrieval_locations,
+            retrieved_tokens=int(retrieved_tokens),
+            transfer_bytes=tot_kv_size,
+            load_ms=onload_time * 1000.0,
+        )
         # The retrieved may be larger than the need_to_load
         # Example (page_size=16, chunk_size=256):
         #
@@ -1680,6 +1695,10 @@ class LMCacheEngine:
             for key, memory_obj in backend_results:
                 memory_obj_map[key] = memory_obj
 
+        observed_locations = kwargs.get("_workload_retrieval_locations")
+        if observed_locations is not None and keyed_memory_objs:
+            observed_locations.append("AsyncExternalBackend")
+
         # TODO(Jiayi): hashing inside `process_tokens` can be skipped.
         used_keys: set[CacheEngineKey] = set()
         for start, end, key in self.token_database.process_tokens(
@@ -1751,6 +1770,7 @@ class LMCacheEngine:
             block_mapping = self.storage_manager.get_block_mapping(chunk_infos)
 
         last_failed_block_start = None
+        observed_locations = kwargs.get("_workload_retrieval_locations")
         for location, blocks in block_mapping.items():
             keys = [key for key, _, _ in blocks]
             memory_objs = self.storage_manager.batched_get(
@@ -1773,6 +1793,8 @@ class LMCacheEngine:
                         last_failed_block_start = start
                     break
                 reordered_chunks.append((key, memory_obj, start, end))
+                if observed_locations is not None:
+                    observed_locations.append(location)
                 tot_kv_size += memory_obj.get_size()
                 ret_mask[start:end] = True
                 used_keys.add(key)

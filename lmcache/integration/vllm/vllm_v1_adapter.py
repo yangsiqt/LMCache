@@ -109,6 +109,14 @@ def extract_request_configs(sampling_params: SamplingParams) -> Optional[dict]:
                     if request_configs is None:
                         request_configs = {}
                     request_configs[k] = v
+                elif k == "workload_aware" and isinstance(v, dict):
+                    if request_configs is None:
+                        request_configs = {}
+                    for field in ("request_id", "session_id", "trace_id"):
+                        if value := v.get(field):
+                            request_configs[f"lmcache.workload_aware.{field}"] = str(
+                                value
+                            )
     return request_configs
 
 
