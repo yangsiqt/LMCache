@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Standard
 from concurrent.futures import Future, TimeoutError
-from typing import Any, Callable, List, Optional, Sequence, Set
+from typing import TYPE_CHECKING, Any, Callable, List, Optional, Sequence, Set
 import asyncio
 import threading
 import time
@@ -16,10 +16,16 @@ from lmcache.v1.exceptions import IrrecoverableException
 from lmcache.v1.memory_management import MemoryObj
 from lmcache.v1.metadata import LMCacheMetadata
 from lmcache.v1.storage_backend.abstract_backend import StorageBackendInterface
+from lmcache.v1.storage_backend.batched_message_sender import BatchedMessageSender
 from lmcache.v1.storage_backend.connector import CreateConnector
 from lmcache.v1.storage_backend.connector.base_connector import RemoteConnector
 from lmcache.v1.storage_backend.local_cpu_backend import LocalCPUBackend
 from lmcache.v1.storage_backend.naive_serde import CreateSerde
+from lmcache.v1.cache_controller.message import OpType
+
+if TYPE_CHECKING:
+    # First Party
+    from lmcache.v1.cache_controller.worker import LMCacheWorker
 
 logger = init_logger(__name__)
 
@@ -33,6 +39,7 @@ class RemoteBackend(StorageBackendInterface):
         local_cpu_backend: Optional[LocalCPUBackend],
         dst_device: str = torch_device_type,
         plugin_name: Optional[str] = None,
+        lmcache_worker: Optional["LMCacheWorker"] = None,
     ):
         super().__init__(dst_device=dst_device)
         self.put_tasks: Set[CacheEngineKey] = set()
@@ -58,6 +65,16 @@ class RemoteBackend(StorageBackendInterface):
         self.loop = loop
         self.config = config
         self.metadata = metadata
+        self.batched_msg_sender = (
+            BatchedMessageSender(
+                metadata=metadata,
+                config=config,
+                location=str(self),
+                lmcache_worker=lmcache_worker,
+            )
+            if lmcache_worker is not None
+            else None
+        )
 
         # Re-establish connection only when the connection
         # has been lost for 10 secs
@@ -210,11 +227,16 @@ class RemoteBackend(StorageBackendInterface):
         with self.lock:
             return key in self.put_tasks
 
-    def put_callback(self, future: Future, key: CacheEngineKey):
+    def put_callback(self, future: Future, key: CacheEngineKey) -> None:
         with self.lock:
             self.put_tasks.discard(key)
         try:
             future.result()
+            if self.batched_msg_sender is not None:
+                self.batched_msg_sender.add_kv_op(
+                    op_type=OpType.ADMIT,
+                    key=key.chunk_hash,
+                )
         except Exception as e:
             self._put_failed_count += 1
             logger.error("Put task failed for key %s: %s", key, e)
@@ -272,12 +294,23 @@ class RemoteBackend(StorageBackendInterface):
         future.add_done_callback(put_done_callback)
         return future
 
-    def batched_put_callback(self, future: Future, keys: List[CacheEngineKey]):
+    def batched_put_callback(self, future: Future, keys: List[CacheEngineKey]) -> None:
         """
         Callback function for batched put tasks.
         """
         with self.lock:
             self.put_tasks.difference_update(keys)
+        try:
+            future.result()
+            if self.batched_msg_sender is not None:
+                for key in keys:
+                    self.batched_msg_sender.add_kv_op(
+                        op_type=OpType.ADMIT,
+                        key=key.chunk_hash,
+                    )
+        except Exception as e:
+            self._put_failed_count += len(keys)
+            logger.error("Batched put task failed for %d keys: %s", len(keys), e)
 
     def batched_submit_put_task(
         self,
@@ -599,7 +632,13 @@ class RemoteBackend(StorageBackendInterface):
             return False
 
         try:
-            return self.connection.remove_sync(key)
+            removed = self.connection.remove_sync(key)
+            if removed and self.batched_msg_sender is not None:
+                self.batched_msg_sender.add_kv_op(
+                    op_type=OpType.EVICT,
+                    key=key.chunk_hash,
+                )
+            return removed
         except Exception as e:
             logger.exception(
                 "Failed to remove key %s from remote backend, error: %s", key, e
@@ -615,6 +654,8 @@ class RemoteBackend(StorageBackendInterface):
 
     def close(self):
         try:
+            if self.batched_msg_sender is not None:
+                self.batched_msg_sender.close()
             assert self.connection is not None
             future = asyncio.run_coroutine_threadsafe(
                 self.connection.close(), self.loop

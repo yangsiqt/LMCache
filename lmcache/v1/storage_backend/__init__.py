@@ -270,6 +270,7 @@ def CreateStorageBackends(
                     local_cpu_backend,
                     dst_device,
                     plugin_name=plugin_name,
+                    lmcache_worker=lmcache_worker,
                 )
                 backend_name = "RemoteBackend-%s" % plugin_name
                 storage_backends[backend_name] = remote_backend
@@ -297,6 +298,7 @@ def CreateStorageBackends(
             loop,
             local_cpu_backend,
             dst_device,
+            lmcache_worker=lmcache_worker,
         )
         backend_name = str(remote_backend)
         storage_backends[backend_name] = remote_backend

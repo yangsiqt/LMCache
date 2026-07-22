@@ -12,6 +12,7 @@ import torch
 # First Party
 from lmcache.utils import CacheEngineKey
 from lmcache.v1.config import LMCacheEngineConfig
+from lmcache.v1.cache_controller.message import BatchedKVOperationMsg, OpType
 from lmcache.v1.memory_management import MemoryObj
 from lmcache.v1.metadata import LMCacheMetadata
 from lmcache.v1.storage_backend.local_cpu_backend import LocalCPUBackend
@@ -287,6 +288,46 @@ class TestFSConnector:
 
         remote_backend_with_fs.local_cpu_backend.memory_allocator.close()
         remote_backend_with_fs.close()
+
+    def test_remote_admit_and_evict_are_reported_to_controller(
+        self, temp_fs_path, async_loop, local_cpu_backend
+    ):
+        """Report successful remote writes and removals as controller events."""
+
+        class FakeWorker:
+            def __init__(self) -> None:
+                self.messages: list[BatchedKVOperationMsg] = []
+
+            def put_msg(self, message: BatchedKVOperationMsg) -> None:
+                self.messages.append(message)
+
+        worker = FakeWorker()
+        backend = RemoteBackend(
+            config=create_test_config(temp_fs_path),
+            metadata=create_test_metadata(),
+            loop=async_loop,
+            local_cpu_backend=local_cpu_backend,
+            dst_device="cpu",
+            lmcache_worker=worker,  # type: ignore[arg-type]
+        )
+        key = create_test_key(31)
+        future = backend.submit_put_task(key, create_test_memory_obj())
+        future.result(timeout=5.0)
+        assert backend.batched_msg_sender is not None
+        backend.batched_msg_sender.flush()
+
+        assert backend.remove(key)
+        backend.batched_msg_sender.flush()
+
+        operations = [
+            operation for message in worker.messages for operation in message.operations
+        ]
+        assert [operation.op_type for operation in operations] == [
+            OpType.ADMIT,
+            OpType.EVICT,
+        ]
+        assert all(message.location == "RemoteBackend" for message in worker.messages)
+        backend.close()
 
     def test_batched_put_and_get(self, remote_backend_with_fs):
         """Test batched put and get operations."""
