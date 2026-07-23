@@ -10,6 +10,7 @@ from lmcache.integration.vllm.workload_aware import (
     WorkloadAwareResultTracker,
     decide_retrieve,
     record_actual_retrieve,
+    record_worker_load_started,
     workload_aware_search_range,
 )
 
@@ -208,6 +209,42 @@ def test_actual_retrieve_trace_distinguishes_l1_and_l2(tmp_path, monkeypatch) ->
     assert rows[0]["path_mismatch"] is False
     assert rows[0]["terminal"] is False
     assert rows[0]["backend_id"] == "backend-0"
+
+
+def test_worker_load_attempt_ids_allow_reloads_after_preemption(
+    tmp_path, monkeypatch
+) -> None:
+    path = tmp_path / "actual.jsonl"
+    monkeypatch.setenv("LMCACHE_WORKLOAD_AWARE_ACTUAL_TRACE_PATH", str(path))
+    request_configs = {
+        "lmcache.workload_aware.attempt_id": "0",
+        "lmcache.workload_aware.backend_id": "backend-0",
+        "lmcache.workload_aware.decision_id": "reload:0",
+        "lmcache.workload_aware.selected_path": "mooncake_l2",
+    }
+
+    first = record_worker_load_started(
+        request_id="reload", request_configs=request_configs, required_tokens=256
+    )
+    second = record_worker_load_started(
+        request_id="reload", request_configs=request_configs, required_tokens=128
+    )
+    record_actual_retrieve(
+        request_id="reload",
+        storage_locations=["RemoteBackend"],
+        retrieved_tokens=128,
+        transfer_bytes=1024,
+        load_ms=4.0,
+        attempt_id="0",
+        backend_id="backend-0",
+        selected_path="mooncake_l2",
+        decision_id="reload:0",
+        load_attempt_id=second,
+    )
+
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert (first, second) == (0, 1)
+    assert [row["load_attempt_id"] for row in rows] == [0, 1, 1]
 
 
 def test_extract_request_configs_forwards_trace_identity() -> None:

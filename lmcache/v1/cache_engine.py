@@ -835,7 +835,7 @@ class LMCacheEngine:
             num_required_tokens = torch.sum(mask).item()
         else:
             num_required_tokens = len(tokens)
-        record_worker_load_started(
+        load_attempt_id = record_worker_load_started(
             request_id=trace_request_id,
             request_configs=request_configs,
             required_tokens=int(num_required_tokens),
@@ -989,6 +989,7 @@ class LMCacheEngine:
             process_tokens_ms=retrieve_stats.process_tokens_time * 1000.0,
             to_gpu_ms=retrieve_stats.to_gpu_time * 1000.0,
             broadcast_ms=retrieve_stats.broadcast_time * 1000.0,
+            load_attempt_id=load_attempt_id,
         )
         # The retrieved may be larger than the need_to_load
         # Example (page_size=16, chunk_size=256):

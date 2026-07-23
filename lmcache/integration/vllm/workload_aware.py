@@ -27,6 +27,21 @@ _STRICT_SEARCH_RANGES = {
     "mooncake_l2": ["RemoteBackend"],
 }
 
+_worker_load_attempts: dict[tuple[str, str, str], int] = {}
+_worker_load_attempts_lock = threading.Lock()
+
+
+def _next_worker_load_attempt(request_id: str, attempt_id: str, backend_id: str) -> int:
+    key = (request_id, attempt_id, backend_id)
+    with _worker_load_attempts_lock:
+        load_attempt_id = _worker_load_attempts.get(key, 0)
+        _worker_load_attempts[key] = load_attempt_id + 1
+        if len(_worker_load_attempts) > 100_000:
+            current = _worker_load_attempts[key]
+            _worker_load_attempts.clear()
+            _worker_load_attempts[key] = current
+    return load_attempt_id
+
 
 def workload_aware_search_range(
     request_configs: dict[str, Any] | None,
@@ -58,7 +73,10 @@ def record_worker_load_started(
     request_id: str,
     request_configs: dict[str, Any],
     required_tokens: int,
-) -> None:
+) -> int:
+    attempt_id = str(request_configs.get("lmcache.workload_aware.attempt_id", ""))
+    backend_id = str(request_configs.get("lmcache.workload_aware.backend_id", ""))
+    load_attempt_id = _next_worker_load_attempt(request_id, attempt_id, backend_id)
     _append_worker_event(
         {
             "schema_version": "2.1",
@@ -66,15 +84,11 @@ def record_worker_load_started(
             "phase": "load_started",
             "terminal": False,
             "request_id": request_id,
-            "attempt_id": str(
-                request_configs.get("lmcache.workload_aware.attempt_id", "")
-            ),
+            "attempt_id": attempt_id,
             "decision_id": str(
                 request_configs.get("lmcache.workload_aware.decision_id", "")
             ),
-            "backend_id": str(
-                request_configs.get("lmcache.workload_aware.backend_id", "")
-            ),
+            "backend_id": backend_id,
             "selected_path": str(
                 request_configs.get("lmcache.workload_aware.selected_path", "")
             ),
@@ -85,9 +99,11 @@ def record_worker_load_started(
                 request_configs.get("lmcache.workload_aware.concurrency_bucket", "")
             ),
             "required_tokens": max(0, int(required_tokens)),
+            "load_attempt_id": load_attempt_id,
             "recorded_at": time.time(),
         }
     )
+    return load_attempt_id
 
 
 def record_actual_retrieve(
@@ -106,6 +122,7 @@ def record_actual_retrieve(
     process_tokens_ms: float = 0.0,
     to_gpu_ms: float = 0.0,
     broadcast_ms: float = 0.0,
+    load_attempt_id: int = 0,
 ) -> None:
     """Append worker-observed retrieval evidence for experiment trace joins."""
     locations = sorted(set(storage_locations))
@@ -132,6 +149,7 @@ def record_actual_retrieve(
         "decision_id": decision_id,
         "length_bucket": length_bucket,
         "concurrency_bucket": concurrency_bucket,
+        "load_attempt_id": max(0, int(load_attempt_id)),
         "actual_kv_path": actual_path,
         "path_mismatch": bool(
             selected_path in {"lmcache_l1", "mooncake_l2"}
