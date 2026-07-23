@@ -14,6 +14,13 @@ from typing import Any, Callable, Literal
 
 RetrieveMode = Literal["auto", "force", "skip"]
 _VALID_RETRIEVE_MODES = {"auto", "force", "skip"}
+_VALID_SELECTED_PATHS = {
+    "",
+    "local_hbm",
+    "lmcache_l1",
+    "mooncake_l2",
+    "recompute",
+}
 
 
 def record_actual_retrieve(
@@ -23,6 +30,9 @@ def record_actual_retrieve(
     retrieved_tokens: int,
     transfer_bytes: int,
     load_ms: float,
+    attempt_id: str = "",
+    backend_id: str = "",
+    selected_path: str = "",
 ) -> None:
     """Append worker-observed retrieval evidence for experiment trace joins."""
     trace_path = os.getenv("LMCACHE_WORKLOAD_AWARE_ACTUAL_TRACE_PATH")
@@ -41,9 +51,14 @@ def record_actual_retrieve(
     else:
         actual_path = "mixed_external"
     row = {
-        "schema_version": "1.0",
-        "event_type": "actual_retrieve",
+        "schema_version": "2.0",
+        "event_type": "kv_execution_feedback",
+        "phase": "worker_retrieve",
+        "terminal": False,
         "request_id": request_id,
+        "attempt_id": attempt_id,
+        "backend_id": backend_id,
+        "selected_path": selected_path,
         "actual_kv_path": actual_path,
         "storage_locations": locations,
         "retrieved_tokens": max(0, int(retrieved_tokens)),
@@ -68,6 +83,9 @@ class WorkloadAwareRequest:
     request_id: str = ""
     session_id: str = ""
     trace_id: str = ""
+    attempt_id: str = ""
+    backend_id: str = ""
+    selected_path: str = ""
 
     @classmethod
     def from_kv_transfer_params(
@@ -90,12 +108,18 @@ class WorkloadAwareRequest:
                 raise ValueError("min_retrieve_tokens must be an integer")
             if threshold < 0:
                 raise ValueError("min_retrieve_tokens must be non-negative")
+        selected_path = str(raw.get("selected_path", ""))
+        if selected_path not in _VALID_SELECTED_PATHS:
+            raise ValueError(f"invalid workload-aware selected_path: {selected_path}")
         return cls(
             retrieve_mode=mode,
             min_retrieve_tokens=threshold,
             request_id=str(raw.get("request_id", "")),
             session_id=str(raw.get("session_id", "")),
             trace_id=str(raw.get("trace_id", "")),
+            attempt_id=str(raw.get("attempt_id", "")),
+            backend_id=str(raw.get("backend_id", "")),
+            selected_path=selected_path,
         )
 
 
@@ -134,6 +158,9 @@ class WorkloadAwareResult:
     request_id: str
     session_id: str
     trace_id: str
+    attempt_id: str
+    backend_id: str
+    selected_path: str
     retrieve_mode: str
     actual_kv_path: str = "pending"
     vllm_cached_tokens: int = 0
@@ -211,6 +238,9 @@ class WorkloadAwareResultTracker:
                     request_id=control.request_id or request_id,
                     session_id=control.session_id,
                     trace_id=control.trace_id,
+                    attempt_id=control.attempt_id,
+                    backend_id=control.backend_id,
+                    selected_path=control.selected_path,
                     retrieve_mode=control.retrieve_mode,
                 )
                 self._results[request_id] = result
@@ -264,6 +294,15 @@ class WorkloadAwareResultTracker:
             if aborted:
                 result.fallback_reason = result.fallback_reason or "request_aborted"
             output = result.to_dict()
+            output.update(
+                {
+                    "schema_version": "2.0",
+                    "event_type": "kv_execution_feedback",
+                    "phase": "request_finished",
+                    "terminal": True,
+                    "recorded_at": time.time(),
+                }
+            )
         self._trace(output)
         return output
 

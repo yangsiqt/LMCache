@@ -19,6 +19,9 @@ def controls(mode: str, threshold: int | None = None) -> dict:
         "request_id": "request-1",
         "session_id": "session-1",
         "trace_id": "request-1:0",
+        "attempt_id": "0",
+        "backend_id": "backend-0",
+        "selected_path": "lmcache_l1",
     }
     if threshold is not None:
         workload_aware["min_retrieve_tokens"] = threshold
@@ -51,6 +54,13 @@ def test_invalid_request_threshold_is_rejected(value) -> None:
         WorkloadAwareRequest.from_kv_transfer_params(params)
 
 
+def test_invalid_selected_path_is_rejected() -> None:
+    params = controls("auto")
+    params["workload_aware"]["selected_path"] = "unknown"
+    with pytest.raises(ValueError):
+        WorkloadAwareRequest.from_kv_transfer_params(params)
+
+
 def test_result_tracker_reports_known_values_without_fabricating_timings() -> None:
     now = [1.0]
     tracker = WorkloadAwareResultTracker(clock=lambda: now[0])
@@ -66,6 +76,10 @@ def test_result_tracker_reports_known_values_without_fabricating_timings() -> No
     assert result["lookup_ms"] == pytest.approx(25)
     assert result["load_ms"] is None
     assert result["transfer_bytes"] is None
+    assert result["terminal"] is True
+    assert result["attempt_id"] == "0"
+    assert result["backend_id"] == "backend-0"
+    assert result["selected_path"] == "lmcache_l1"
 
 
 def test_result_tracker_writes_async_connector_trace(tmp_path) -> None:
@@ -80,6 +94,8 @@ def test_result_tracker_writes_async_connector_trace(tmp_path) -> None:
     row = json.loads(path.read_text(encoding="utf-8"))
     assert row["request_id"] == "request-1"
     assert row["actual_kv_path"] == "recompute"
+    assert row["event_type"] == "kv_execution_feedback"
+    assert row["terminal"] is True
 
 
 class FakeLookupClient:
@@ -148,6 +164,9 @@ def test_actual_retrieve_trace_distinguishes_l1_and_l2(tmp_path, monkeypatch) ->
         retrieved_tokens=256,
         transfer_bytes=1024,
         load_ms=2.5,
+        attempt_id="0",
+        backend_id="backend-0",
+        selected_path="lmcache_l1",
     )
     record_actual_retrieve(
         request_id="l2",
@@ -161,6 +180,9 @@ def test_actual_retrieve_trace_distinguishes_l1_and_l2(tmp_path, monkeypatch) ->
         "lmcache_l1",
         "mooncake_l2",
     ]
+    assert rows[0]["event_type"] == "kv_execution_feedback"
+    assert rows[0]["terminal"] is False
+    assert rows[0]["backend_id"] == "backend-0"
 
 
 def test_extract_request_configs_forwards_trace_identity() -> None:
@@ -173,6 +195,9 @@ def test_extract_request_configs_forwards_trace_identity() -> None:
                     "request_id": "client-request",
                     "session_id": "session",
                     "trace_id": "client-request:0",
+                    "attempt_id": "0",
+                    "backend_id": "backend-0",
+                    "selected_path": "lmcache_l1",
                     "retrieve_mode": "force",
                 }
             }
@@ -182,4 +207,7 @@ def test_extract_request_configs_forwards_trace_identity() -> None:
         "lmcache.workload_aware.request_id": "client-request",
         "lmcache.workload_aware.session_id": "session",
         "lmcache.workload_aware.trace_id": "client-request:0",
+        "lmcache.workload_aware.attempt_id": "0",
+        "lmcache.workload_aware.backend_id": "backend-0",
+        "lmcache.workload_aware.selected_path": "lmcache_l1",
     }

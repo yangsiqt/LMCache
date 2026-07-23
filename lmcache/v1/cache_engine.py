@@ -956,6 +956,15 @@ class LMCacheEngine:
             retrieved_tokens=int(retrieved_tokens),
             transfer_bytes=tot_kv_size,
             load_ms=onload_time * 1000.0,
+            attempt_id=str(
+                request_configs.get("lmcache.workload_aware.attempt_id", "")
+            ),
+            backend_id=str(
+                request_configs.get("lmcache.workload_aware.backend_id", "")
+            ),
+            selected_path=str(
+                request_configs.get("lmcache.workload_aware.selected_path", "")
+            ),
         )
         # The retrieved may be larger than the need_to_load
         # Example (page_size=16, chunk_size=256):
