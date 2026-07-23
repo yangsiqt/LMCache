@@ -10,6 +10,7 @@ from lmcache.integration.vllm.workload_aware import (
     WorkloadAwareResultTracker,
     decide_retrieve,
     record_actual_retrieve,
+    workload_aware_search_range,
 )
 
 
@@ -91,11 +92,32 @@ def test_result_tracker_writes_async_connector_trace(tmp_path) -> None:
     tracker.record_decision("request-1", decide_retrieve(control, 0, 0), 0)
     assert tracker.finish("request-1") is not None
     tracker.close()
-    row = json.loads(path.read_text(encoding="utf-8"))
-    assert row["request_id"] == "request-1"
-    assert row["actual_kv_path"] == "recompute"
-    assert row["event_type"] == "kv_execution_feedback"
-    assert row["terminal"] is True
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert [row["phase"] for row in rows] == [
+        "scheduler_seen",
+        "lookup_completed",
+        "request_finished",
+    ]
+    assert all(row["request_id"] == "request-1" for row in rows)
+    assert rows[-1]["actual_kv_path"] == "recompute"
+    assert rows[-1]["event_type"] == "kv_execution_feedback"
+    assert rows[-1]["terminal"] is True
+    assert rows[-1]["schema_version"] == "2.1"
+
+
+def test_strict_selected_path_maps_to_one_storage_tier() -> None:
+    assert workload_aware_search_range(
+        {"lmcache.workload_aware.selected_path": "lmcache_l1"}
+    ) == ["LocalCPUBackend"]
+    assert workload_aware_search_range(
+        {"lmcache.workload_aware.selected_path": "mooncake_l2"}
+    ) == ["RemoteBackend"]
+    assert (
+        workload_aware_search_range(
+            {"lmcache.workload_aware.selected_path": "recompute"}
+        )
+        is None
+    )
 
 
 class FakeLookupClient:
@@ -181,6 +203,9 @@ def test_actual_retrieve_trace_distinguishes_l1_and_l2(tmp_path, monkeypatch) ->
         "mooncake_l2",
     ]
     assert rows[0]["event_type"] == "kv_execution_feedback"
+    assert rows[0]["phase"] == "load_completed"
+    assert rows[0]["schema_version"] == "2.1"
+    assert rows[0]["path_mismatch"] is False
     assert rows[0]["terminal"] is False
     assert rows[0]["backend_id"] == "backend-0"
 
@@ -198,6 +223,9 @@ def test_extract_request_configs_forwards_trace_identity() -> None:
                     "attempt_id": "0",
                     "backend_id": "backend-0",
                     "selected_path": "lmcache_l1",
+                    "decision_id": "client-request:0",
+                    "length_bucket": "le_8k",
+                    "concurrency_bucket": "low",
                     "retrieve_mode": "force",
                 }
             }
@@ -210,4 +238,7 @@ def test_extract_request_configs_forwards_trace_identity() -> None:
         "lmcache.workload_aware.attempt_id": "0",
         "lmcache.workload_aware.backend_id": "backend-0",
         "lmcache.workload_aware.selected_path": "lmcache_l1",
+        "lmcache.workload_aware.decision_id": "client-request:0",
+        "lmcache.workload_aware.length_bucket": "le_8k",
+        "lmcache.workload_aware.concurrency_bucket": "low",
     }

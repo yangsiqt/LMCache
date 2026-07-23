@@ -119,6 +119,9 @@ def extract_request_configs(sampling_params: SamplingParams) -> Optional[dict]:
                         "attempt_id",
                         "backend_id",
                         "selected_path",
+                        "decision_id",
+                        "length_bucket",
+                        "concurrency_bucket",
                     ):
                         if value := v.get(field):
                             request_configs[f"lmcache.workload_aware.{field}"] = str(

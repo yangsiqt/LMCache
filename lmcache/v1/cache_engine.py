@@ -29,7 +29,11 @@ import torch
 
 # First Party
 from lmcache import torch_dev, torch_device_type
-from lmcache.integration.vllm.workload_aware import record_actual_retrieve
+from lmcache.integration.vllm.workload_aware import (
+    record_actual_retrieve,
+    record_worker_load_started,
+    workload_aware_search_range,
+)
 from lmcache.logging import init_logger
 from lmcache.observability import LMCacheStatsLogger, LMCStatsMonitor
 from lmcache.usage_telemetry import InitializeUsageContext
@@ -805,6 +809,13 @@ class LMCacheEngine:
         :raises: ValueError if the number of Falses in the mask is not a
             multiple of the chunk size.
         """
+        request_configs = kwargs.get("request_configs") or {}
+        trace_request_id = str(
+            request_configs.get(
+                "lmcache.workload_aware.request_id", self._get_req_id(kwargs)
+            )
+        )
+
         # Health check: block operation if LMCache is unhealthy
         if not self.is_healthy():
             logger.warning("LMCache is unhealthy, skipping retrieve operation")
@@ -824,6 +835,11 @@ class LMCacheEngine:
             num_required_tokens = torch.sum(mask).item()
         else:
             num_required_tokens = len(tokens)
+        record_worker_load_started(
+            request_id=trace_request_id,
+            request_configs=request_configs,
+            required_tokens=int(num_required_tokens),
+        )
 
         # KVCache Check logging
         self._log_kvcache_for_check(
@@ -946,10 +962,6 @@ class LMCacheEngine:
             retrieved_tokens,
         )
         onload_time = retrieve_stats.time_to_retrieve()
-        request_configs = kwargs.get("request_configs") or {}
-        trace_request_id = request_configs.get(
-            "lmcache.workload_aware.request_id", req_id
-        )
         record_actual_retrieve(
             request_id=str(trace_request_id),
             storage_locations=retrieval_locations,
@@ -965,6 +977,18 @@ class LMCacheEngine:
             selected_path=str(
                 request_configs.get("lmcache.workload_aware.selected_path", "")
             ),
+            decision_id=str(
+                request_configs.get("lmcache.workload_aware.decision_id", "")
+            ),
+            length_bucket=str(
+                request_configs.get("lmcache.workload_aware.length_bucket", "")
+            ),
+            concurrency_bucket=str(
+                request_configs.get("lmcache.workload_aware.concurrency_bucket", "")
+            ),
+            process_tokens_ms=retrieve_stats.process_tokens_time * 1000.0,
+            to_gpu_ms=retrieve_stats.to_gpu_time * 1000.0,
+            broadcast_ms=retrieve_stats.broadcast_time * 1000.0,
         )
         # The retrieved may be larger than the need_to_load
         # Example (page_size=16, chunk_size=256):
@@ -1202,6 +1226,9 @@ class LMCacheEngine:
 
         if search_range is None:
             search_range = self.retrieve_locations
+        strict_search_range = workload_aware_search_range(request_configs)
+        if strict_search_range is not None:
+            search_range = strict_search_range
 
         res = 0
         try:
