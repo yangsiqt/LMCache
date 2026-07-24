@@ -227,6 +227,22 @@ class WorkerNode:
                     return KVChunkInfo("", self.worker_id, location)
         return None
 
+    def find_all_key_locations(self, key: int) -> list[KVChunkInfo]:
+        """Return every storage location containing ``key`` in this worker.
+
+        Args:
+            key: Chunk hash to locate.
+
+        Returns:
+            One immutable location record per matching storage backend.
+        """
+        with self._lock:
+            return [
+                KVChunkInfo("", self.worker_id, location)
+                for location, keys in self.kv_store.items()
+                if key in keys
+            ]
+
     def to_worker_info(self, instance_id: str) -> WorkerInfo:
         """Convert to WorkerInfo for backward compatibility."""
         # No need to lock here
@@ -320,6 +336,23 @@ class InstanceNode:
             if kv_info := worker_node.find_key_simple(key):
                 return KVChunkInfo(self.instance_id, worker_id, kv_info.location)
         return None
+
+    def find_all_key_locations(self, key: int) -> list[KVChunkInfo]:
+        """Return every worker and storage location containing ``key``.
+
+        Args:
+            key: Chunk hash to locate.
+
+        Returns:
+            Location records with this instance identifier populated.
+        """
+        results: list[KVChunkInfo] = []
+        for worker_id, worker_node in list(self.workers.items()):
+            results.extend(
+                KVChunkInfo(self.instance_id, worker_id, item.location)
+                for item in worker_node.find_all_key_locations(key)
+            )
+        return results
 
     def has_worker_with_ip(self, ip: str) -> bool:
         """
@@ -604,6 +637,31 @@ class RegistryTree:
                 if result is not None:
                     return result
             return None
+
+    def find_all_kv(
+        self,
+        key: int,
+        exclude_instance_id: Optional[str] = None,
+    ) -> list[KVChunkInfo]:
+        """Find all workers and storage locations containing a KV chunk.
+
+        Unlike :meth:`find_kv`, this method preserves multiple cache tiers for
+        the same instance. The returned snapshot is safe for callers to retain.
+
+        Args:
+            key: Chunk hash to find.
+            exclude_instance_id: Optional instance whose workers are skipped.
+
+        Returns:
+            All matching location records in deterministic registry order.
+        """
+        results: list[KVChunkInfo] = []
+        with self._rwlock.read_lock(timeout=1):
+            for instance_id, instance_node in self.instances.items():
+                if instance_id == exclude_instance_id:
+                    continue
+                results.extend(instance_node.find_all_key_locations(key))
+        return results
 
     def find_kv_with_worker_info(
         self,

@@ -679,9 +679,15 @@ class LookupRetMsg(OrchRetMsg):
 
     event_id: str
     layout_info: Dict[str, Tuple[str, int]]
+    layout_info_v2: List[Tuple[str, int, str, int]] = msgspec.field(
+        default_factory=list
+    )
 
     def describe(self) -> str:
-        return f"The layout info is {self.layout_info}"
+        return (
+            f"The layout info is {self.layout_info}; "
+            f"multi-location layout is {self.layout_info_v2}"
+        )
 
 
 class ClearRetMsg(OrchRetMsg):

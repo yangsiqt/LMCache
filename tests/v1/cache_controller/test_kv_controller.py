@@ -423,6 +423,45 @@ class TestKVControllerLookup:
             assert "test_instance" in result.layout_info
             assert result.layout_info["test_instance"] == ("LocalCPUBackend", 256)
 
+    @pytest.mark.asyncio
+    async def test_lookup_reports_each_cache_tier_with_own_prefix(self, kv_controller):
+        """A single instance may expose different prefix lengths in L1 and L2."""
+        await kv_controller.handle_batched_kv_operations(
+            BatchedKVOperationMsg(
+                instance_id="test_instance",
+                worker_id=0,
+                location="LocalCPUBackend",
+                operations=[
+                    KVOpEvent(op_type=OpType.ADMIT, key=1000, seq_num=1),
+                    KVOpEvent(op_type=OpType.ADMIT, key=1001, seq_num=2),
+                ],
+            )
+        )
+        await kv_controller.handle_batched_kv_operations(
+            BatchedKVOperationMsg(
+                instance_id="test_instance",
+                worker_id=0,
+                location="RemoteBackend",
+                operations=[KVOpEvent(op_type=OpType.ADMIT, key=1000, seq_num=1)],
+            )
+        )
+
+        with patch.object(
+            kv_controller.token_database, "process_tokens"
+        ) as mock_process:
+            mock_process.return_value = [
+                (0, 256, 1000),
+                (256, 512, 1001),
+            ]
+            result = await kv_controller.lookup(
+                LookupMsg(event_id="event_multi_tier", tokens=list(range(512)))
+            )
+
+        assert result.layout_info_v2 == [
+            ("test_instance", 0, "LocalCPUBackend", 512),
+            ("test_instance", 0, "RemoteBackend", 256),
+        ]
+
 
 class TestKVControllerBatchedP2PLookup:
     """Test KVController batched P2P lookup operations."""

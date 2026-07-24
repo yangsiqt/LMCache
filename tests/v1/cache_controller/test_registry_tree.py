@@ -255,6 +255,39 @@ class TestInstanceNodeLocking:
 class TestRegistryTreeFineGrainedLocking:
     """Test RegistryTree's fine-grained object-based locking."""
 
+    def test_find_all_kv_preserves_multiple_locations(self):
+        registry = RegistryTree()
+        registry.register_worker(
+            instance_id="instance",
+            worker_id=0,
+            ip="127.0.0.1",
+            port=8000,
+            peer_init_url=None,
+            socket=None,
+            registration_time=time.time(),
+        )
+        for seq_num, location in enumerate(
+            ("LocalCPUBackend", "RemoteBackend"), start=1
+        ):
+            registry.handle_batched_kv_operations(
+                BatchedKVOperationMsg(
+                    instance_id="instance",
+                    worker_id=0,
+                    location=location,
+                    operations=[
+                        KVOpEvent(op_type=OpType.ADMIT, key=123, seq_num=seq_num)
+                    ],
+                )
+            )
+
+        assert {
+            (item.instance_id, item.worker_id, item.location)
+            for item in registry.find_all_kv(123)
+        } == {
+            ("instance", 0, "LocalCPUBackend"),
+            ("instance", 0, "RemoteBackend"),
+        }
+
     def test_concurrent_operations_different_instances(self):
         """
         Test that operations on different instances don't block each other.

@@ -272,6 +272,20 @@ def mock_reg_controller():
                     return KVChunkInfo(instance_id, worker_id, location)
         return None
 
+    def mock_find_all_kv(key, exclude_instance_id=None):
+        results = []
+        for report_id, locations in mock_registry.kv_pool.items():
+            instance_id, worker_id = report_id
+            if exclude_instance_id and instance_id == exclude_instance_id:
+                continue
+            for location, keys in locations.items():
+                if key in keys:
+                    # First Party
+                    from lmcache.v1.cache_controller.utils import KVChunkInfo
+
+                    results.append(KVChunkInfo(instance_id, worker_id, location))
+        return results
+
     def mock_get_worker_kv_keys(instance_id, worker_id, location):
         report_id = (instance_id, worker_id)
         if report_id in mock_registry.kv_pool:
@@ -362,6 +376,7 @@ def mock_reg_controller():
     mock_registry.admit_kv = Mock(side_effect=mock_admit_kv)
     mock_registry.evict_kv = Mock(side_effect=mock_evict_kv)
     mock_registry.find_kv = Mock(side_effect=mock_find_kv)
+    mock_registry.find_all_kv = Mock(side_effect=mock_find_all_kv)
     mock_registry.get_worker_kv_keys = Mock(side_effect=mock_get_worker_kv_keys)
     mock_registry.get_total_kv_count = Mock(side_effect=mock_get_total_kv_count)
     mock_registry.get_seq_discontinuity_count = Mock(

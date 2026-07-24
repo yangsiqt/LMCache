@@ -388,16 +388,42 @@ class KVController:
     async def lookup(self, msg: LookupMsg) -> LookupRetMsg:
         tokens = msg.tokens
         layout_info = {}
+        prefix_by_location: dict[tuple[str, int, str], int] = {}
+        active_locations: set[tuple[str, int, str]] | None = None
         for start, end, key in self.token_database.process_tokens(
             tokens, make_key=False
         ):
-            result = self.registry.find_kv(key)
-            if result is None:
+            results = self.registry.find_all_kv(key)
+            if not results:
                 break
+            result = results[0]
             matched_instance = result.instance_id
             matched_location = result.location
             layout_info[matched_instance] = (matched_location, end)
-        return LookupRetMsg(layout_info=layout_info, event_id=msg.event_id)
+
+            current_locations = {
+                (item.instance_id, item.worker_id, item.location) for item in results
+            }
+            if active_locations is None:
+                active_locations = current_locations
+            else:
+                active_locations &= current_locations
+            for location_key in active_locations:
+                prefix_by_location[location_key] = end
+            if not active_locations:
+                break
+
+        layout_info_v2 = [
+            (instance_id, worker_id, location, cached_tokens)
+            for (instance_id, worker_id, location), cached_tokens in sorted(
+                prefix_by_location.items()
+            )
+        ]
+        return LookupRetMsg(
+            layout_info=layout_info,
+            layout_info_v2=layout_info_v2,
+            event_id=msg.event_id,
+        )
 
     # TODO: improve the matching logic, return multi results
     async def batched_p2p_lookup(

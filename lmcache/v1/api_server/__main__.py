@@ -179,8 +179,10 @@ def create_app(
 
     class LookupResponse(BaseModel):
         event_id: str
-        # a list of (instance_id, location, token_count)
+        # Legacy response: one (location, token_count) per instance.
         layout_info: Dict[str, Tuple[str, int]]
+        # V2.1 response: every (instance, worker, location, token_count).
+        layout_info_v2: List[Tuple[str, int, str, int]]
 
     @app.post("/lookup", response_model=LookupResponse)
     async def lookup(req: LookupRequest):
@@ -194,7 +196,9 @@ def create_app(
             assert not isinstance(ret_msg, ErrorMsg), ret_msg.error
             assert isinstance(ret_msg, LookupRetMsg)
             return LookupResponse(
-                event_id=ret_msg.event_id, layout_info=ret_msg.layout_info
+                event_id=ret_msg.event_id,
+                layout_info=ret_msg.layout_info,
+                layout_info_v2=ret_msg.layout_info_v2,
             )
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e)) from e
