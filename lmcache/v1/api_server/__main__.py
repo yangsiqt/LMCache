@@ -183,6 +183,8 @@ def create_app(
         layout_info: Dict[str, Tuple[str, int]]
         # V2.1 response: every (instance, worker, location, token_count).
         layout_info_v2: List[Tuple[str, int, str, int]]
+        # V2.2 response: V2.1 fields plus the per-location revision.
+        layout_info_v3: List[Tuple[str, int, str, int, int]]
 
     @app.post("/lookup", response_model=LookupResponse)
     async def lookup(req: LookupRequest):
@@ -199,6 +201,7 @@ def create_app(
                 event_id=ret_msg.event_id,
                 layout_info=ret_msg.layout_info,
                 layout_info_v2=ret_msg.layout_info_v2,
+                layout_info_v3=ret_msg.layout_info_v3,
             )
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e)) from e
