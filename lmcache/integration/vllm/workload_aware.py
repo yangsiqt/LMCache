@@ -79,7 +79,7 @@ def record_worker_load_started(
     load_attempt_id = _next_worker_load_attempt(request_id, attempt_id, backend_id)
     _append_worker_event(
         {
-            "schema_version": "2.1",
+            "schema_version": "2.2",
             "event_type": "kv_execution_feedback",
             "phase": "load_started",
             "terminal": False,
@@ -97,6 +97,18 @@ def record_worker_load_started(
             ),
             "concurrency_bucket": str(
                 request_configs.get("lmcache.workload_aware.concurrency_bucket", "")
+            ),
+            "prefix_hash": str(
+                request_configs.get("lmcache.workload_aware.prefix_hash", "")
+            ),
+            "prompt_tokens": int(
+                request_configs.get("lmcache.workload_aware.prompt_tokens", 0)
+            ),
+            "shared_prefix_tokens": int(
+                request_configs.get("lmcache.workload_aware.shared_prefix_tokens", 0)
+            ),
+            "backend_generation": str(
+                request_configs.get("lmcache.workload_aware.backend_generation", "")
             ),
             "required_tokens": max(0, int(required_tokens)),
             "load_attempt_id": load_attempt_id,
@@ -119,6 +131,10 @@ def record_actual_retrieve(
     decision_id: str = "",
     length_bucket: str = "",
     concurrency_bucket: str = "",
+    prefix_hash: str = "",
+    prompt_tokens: int = 0,
+    shared_prefix_tokens: int = 0,
+    backend_generation: str = "",
     process_tokens_ms: float = 0.0,
     to_gpu_ms: float = 0.0,
     broadcast_ms: float = 0.0,
@@ -138,7 +154,7 @@ def record_actual_retrieve(
     else:
         actual_path = "mixed_external"
     row = {
-        "schema_version": "2.1",
+        "schema_version": "2.2",
         "event_type": "kv_execution_feedback",
         "phase": "load_completed",
         "terminal": False,
@@ -149,6 +165,10 @@ def record_actual_retrieve(
         "decision_id": decision_id,
         "length_bucket": length_bucket,
         "concurrency_bucket": concurrency_bucket,
+        "prefix_hash": prefix_hash,
+        "prompt_tokens": max(0, int(prompt_tokens)),
+        "shared_prefix_tokens": max(0, int(shared_prefix_tokens)),
+        "backend_generation": backend_generation,
         "load_attempt_id": max(0, int(load_attempt_id)),
         "actual_kv_path": actual_path,
         "path_mismatch": bool(
@@ -180,6 +200,9 @@ class WorkloadAwareRequest:
     decision_id: str = ""
     length_bucket: str = ""
     concurrency_bucket: str = ""
+    prefix_hash: str = ""
+    prompt_tokens: int = 0
+    shared_prefix_tokens: int = 0
 
     @classmethod
     def from_kv_transfer_params(
@@ -217,6 +240,9 @@ class WorkloadAwareRequest:
             decision_id=str(raw.get("decision_id", "")),
             length_bucket=str(raw.get("length_bucket", "")),
             concurrency_bucket=str(raw.get("concurrency_bucket", "")),
+            prefix_hash=str(raw.get("prefix_hash", "")),
+            prompt_tokens=max(0, int(raw.get("prompt_tokens", 0))),
+            shared_prefix_tokens=max(0, int(raw.get("shared_prefix_tokens", 0))),
         )
 
 
@@ -262,6 +288,10 @@ class WorkloadAwareResult:
     length_bucket: str
     concurrency_bucket: str
     retrieve_mode: str
+    prefix_hash: str = ""
+    prompt_tokens: int = 0
+    shared_prefix_tokens: int = 0
+    backend_generation: str = ""
     actual_kv_path: str = "pending"
     vllm_cached_tokens: int = 0
     lmcache_cached_tokens: int = 0
@@ -289,6 +319,7 @@ class WorkloadAwareResultTracker:
         self._results: dict[str, WorkloadAwareResult] = {}
         self._lookup_started: dict[str, float] = {}
         self._emitted_phases: dict[str, set[str]] = {}
+        self._backend_generation = ""
         self._lock = threading.Lock()
         configured_path = trace_path or os.getenv("LMCACHE_WORKLOAD_AWARE_TRACE_PATH")
         self._trace_path = Path(configured_path) if configured_path else None
@@ -340,7 +371,7 @@ class WorkloadAwareResultTracker:
         row = result.to_dict()
         row.update(
             {
-                "schema_version": "2.1",
+                "schema_version": "2.2",
                 "event_type": "kv_execution_feedback",
                 "phase": phase,
                 "terminal": False,
@@ -371,6 +402,10 @@ class WorkloadAwareResultTracker:
                     length_bucket=control.length_bucket,
                     concurrency_bucket=control.concurrency_bucket,
                     retrieve_mode=control.retrieve_mode,
+                    prefix_hash=control.prefix_hash,
+                    prompt_tokens=control.prompt_tokens,
+                    shared_prefix_tokens=control.shared_prefix_tokens,
+                    backend_generation=self._backend_generation,
                 )
                 self._results[request_id] = result
             result.vllm_cached_tokens = max(0, vllm_cached_tokens)
@@ -442,7 +477,7 @@ class WorkloadAwareResultTracker:
             output = result.to_dict()
             output.update(
                 {
-                    "schema_version": "2.1",
+                    "schema_version": "2.2",
                     "event_type": "kv_execution_feedback",
                     "phase": "request_finished",
                     "terminal": True,
@@ -451,6 +486,11 @@ class WorkloadAwareResultTracker:
             )
         self._trace(output)
         return output
+
+    def set_backend_generation(self, generation: str) -> None:
+        """Atomically publish the current local-HBM cache generation."""
+        with self._lock:
+            self._backend_generation = str(generation)
 
     def close(self) -> None:
         if self._trace_queue is None or self._trace_thread is None:

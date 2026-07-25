@@ -461,6 +461,10 @@ class TestKVControllerLookup:
             ("test_instance", 0, "LocalCPUBackend", 512),
             ("test_instance", 0, "RemoteBackend", 256),
         ]
+        assert result.layout_info_v3 == [
+            ("test_instance", 0, "LocalCPUBackend", 512, 1),
+            ("test_instance", 0, "RemoteBackend", 256, 1),
+        ]
 
 
 class TestKVControllerBatchedP2PLookup:

@@ -63,6 +63,7 @@ class KVController:
         self.token_database = ChunkedTokenDatabase()
         self.registry = registry
         self.cluster_executor: Any = None
+        self._location_revisions: dict[tuple[str, int, str], int] = {}
 
         # Full sync tracker
         self.full_sync_tracker = FullSyncTracker(
@@ -170,6 +171,11 @@ class KVController:
                 msg.instance_id,
                 msg.worker_id,
             )
+            return
+        revision_key = (msg.instance_id, msg.worker_id, msg.location)
+        self._location_revisions[revision_key] = (
+            self._location_revisions.get(revision_key, 0) + 1
+        )
 
     # ============= Full Sync Message Handlers =============
 
@@ -214,6 +220,10 @@ class KVController:
         # This prevents new incremental messages from being processed while we clear
         existing_keys = self.registry.get_worker_kv_keys(
             instance_id, worker_id, msg.location
+        )
+        revision_key = (instance_id, worker_id, msg.location)
+        self._location_revisions[revision_key] = (
+            self._location_revisions.get(revision_key, 0) + 1
         )
         if existing_keys:
             old_count = len(existing_keys)
@@ -291,6 +301,10 @@ class KVController:
                 operations=operations,
             )
             self.registry.handle_batched_kv_operations(batch_msg, is_full_sync=True)
+            revision_key = (instance_id, worker_id, location)
+            self._location_revisions[revision_key] = (
+                self._location_revisions.get(revision_key, 0) + 1
+            )
 
         current_keys = self.registry.get_worker_kv_keys(
             instance_id, worker_id, location
@@ -419,9 +433,20 @@ class KVController:
                 prefix_by_location.items()
             )
         ]
+        layout_info_v3 = [
+            (
+                instance_id,
+                worker_id,
+                location,
+                cached_tokens,
+                self._location_revisions.get((instance_id, worker_id, location), 0),
+            )
+            for instance_id, worker_id, location, cached_tokens in layout_info_v2
+        ]
         return LookupRetMsg(
             layout_info=layout_info,
             layout_info_v2=layout_info_v2,
+            layout_info_v3=layout_info_v3,
             event_id=msg.event_id,
         )
 

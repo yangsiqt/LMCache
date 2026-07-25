@@ -986,6 +986,18 @@ class LMCacheEngine:
             concurrency_bucket=str(
                 request_configs.get("lmcache.workload_aware.concurrency_bucket", "")
             ),
+            prefix_hash=str(
+                request_configs.get("lmcache.workload_aware.prefix_hash", "")
+            ),
+            prompt_tokens=int(
+                request_configs.get("lmcache.workload_aware.prompt_tokens", 0)
+            ),
+            shared_prefix_tokens=int(
+                request_configs.get("lmcache.workload_aware.shared_prefix_tokens", 0)
+            ),
+            backend_generation=str(
+                request_configs.get("lmcache.workload_aware.backend_generation", "")
+            ),
             process_tokens_ms=retrieve_stats.process_tokens_time * 1000.0,
             to_gpu_ms=retrieve_stats.to_gpu_time * 1000.0,
             broadcast_ms=retrieve_stats.broadcast_time * 1000.0,

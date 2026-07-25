@@ -122,6 +122,10 @@ def extract_request_configs(sampling_params: SamplingParams) -> Optional[dict]:
                         "decision_id",
                         "length_bucket",
                         "concurrency_bucket",
+                        "prefix_hash",
+                        "prompt_tokens",
+                        "shared_prefix_tokens",
+                        "backend_generation",
                     ):
                         if value := v.get(field):
                             request_configs[f"lmcache.workload_aware.{field}"] = str(
@@ -618,6 +622,10 @@ class LMCacheConnectorV1Impl:
             )
         )
         self._invalid_block_ids: set[int] = set()
+
+    def on_prefix_cache_generation_changed(self, generation: str) -> None:
+        """Receive the authoritative local-HBM generation from vLLM."""
+        self._workload_aware_results.set_backend_generation(generation)
 
     def _check_legacy_register_kv_caches(self) -> None:
         """Check for legacy connector without register_kv_caches implementation."""

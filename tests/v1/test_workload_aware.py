@@ -24,6 +24,9 @@ def controls(mode: str, threshold: int | None = None) -> dict:
         "attempt_id": "0",
         "backend_id": "backend-0",
         "selected_path": "lmcache_l1",
+        "prefix_hash": "sha256:prefix",
+        "prompt_tokens": 8192,
+        "shared_prefix_tokens": 4096,
     }
     if threshold is not None:
         workload_aware["min_retrieve_tokens"] = threshold
@@ -103,7 +106,19 @@ def test_result_tracker_writes_async_connector_trace(tmp_path) -> None:
     assert rows[-1]["actual_kv_path"] == "recompute"
     assert rows[-1]["event_type"] == "kv_execution_feedback"
     assert rows[-1]["terminal"] is True
-    assert rows[-1]["schema_version"] == "2.1"
+    assert rows[-1]["schema_version"] == "2.2"
+
+
+def test_v2_2_tracker_propagates_hbm_generation_and_prefix_identity() -> None:
+    tracker = WorkloadAwareResultTracker()
+    tracker.set_backend_generation("boot:3")
+    control = WorkloadAwareRequest.from_kv_transfer_params(controls("skip"))
+    assert control is not None
+    result = tracker.begin("request-1", control, 512)
+    assert result.backend_generation == "boot:3"
+    assert result.prefix_hash == "sha256:prefix"
+    assert result.prompt_tokens == 8192
+    assert result.shared_prefix_tokens == 4096
 
 
 def test_strict_selected_path_maps_to_one_storage_tier() -> None:

@@ -480,6 +480,7 @@ class TestReturnMessages:
         assert isinstance(decoded, LookupRetMsg)
         assert decoded.layout_info == {"instance1": ("LocalCPUBackend", 100)}
         assert decoded.layout_info_v2 == []
+        assert decoded.layout_info_v3 == []
 
     def test_clear_ret_msg_serialization(self):
         """Test ClearRetMsg encode/decode."""

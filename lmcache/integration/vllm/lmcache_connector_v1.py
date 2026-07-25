@@ -44,6 +44,9 @@ class LMCacheConnectorV1Dynamic(KVConnectorBase_V1):
             super().__init__(vllm_config=vllm_config, role=role)
         self._lmcache_engine = LMCacheConnectorV1Impl(vllm_config, role, self)
 
+    def on_prefix_cache_generation_changed(self, generation: str) -> None:
+        self._lmcache_engine.on_prefix_cache_generation_changed(generation)
+
     # ==============================
     # Worker-side methods
     # ==============================

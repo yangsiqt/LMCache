@@ -682,11 +682,15 @@ class LookupRetMsg(OrchRetMsg):
     layout_info_v2: List[Tuple[str, int, str, int]] = msgspec.field(
         default_factory=list
     )
+    layout_info_v3: List[Tuple[str, int, str, int, int]] = msgspec.field(
+        default_factory=list
+    )
 
     def describe(self) -> str:
         return (
             f"The layout info is {self.layout_info}; "
-            f"multi-location layout is {self.layout_info_v2}"
+            f"multi-location layout is {self.layout_info_v2}; "
+            f"revisioned layout is {self.layout_info_v3}"
         )
 
 
