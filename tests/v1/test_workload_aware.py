@@ -220,7 +220,7 @@ def test_actual_retrieve_trace_distinguishes_l1_and_l2(tmp_path, monkeypatch) ->
     ]
     assert rows[0]["event_type"] == "kv_execution_feedback"
     assert rows[0]["phase"] == "load_completed"
-    assert rows[0]["schema_version"] == "2.1"
+    assert rows[0]["schema_version"] == "2.2"
     assert rows[0]["path_mismatch"] is False
     assert rows[0]["terminal"] is False
     assert rows[0]["backend_id"] == "backend-0"
