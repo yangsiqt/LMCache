@@ -1389,6 +1389,37 @@ class LMCacheConnectorV1Impl:
     ####################
 
     @_lmcache_nvtx_annotate
+    def on_new_request(self, request: "Request") -> None:
+        """Emit Scheduler admission before the request waits for capacity.
+
+        Args:
+            request: Newly enqueued vLLM request.
+
+        Returns:
+            None.
+        """
+        if request.request_id.startswith("mock_req"):
+            return
+        try:
+            workload_control = WorkloadAwareRequest.from_kv_transfer_params(
+                getattr(request, "kv_transfer_params", None)
+            )
+        except ValueError as error:
+            logger.warning(
+                "Ignoring invalid workload-aware controls for request %s: %s",
+                request.request_id,
+                error,
+            )
+            return
+        if workload_control is not None:
+            self._workload_aware_results.begin(
+                request.request_id,
+                workload_control,
+                request.num_computed_tokens,
+                phase="scheduler_enqueued",
+            )
+
+    @_lmcache_nvtx_annotate
     def get_num_new_matched_tokens(
         self,
         request: "Request",

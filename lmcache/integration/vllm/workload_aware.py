@@ -386,7 +386,10 @@ class WorkloadAwareResultTracker:
         request_id: str,
         control: WorkloadAwareRequest,
         vllm_cached_tokens: int,
+        phase: str = "scheduler_seen",
     ) -> WorkloadAwareResult:
+        if phase not in {"scheduler_enqueued", "scheduler_seen"}:
+            raise ValueError(f"unsupported Scheduler lifecycle phase: {phase}")
         with self._lock:
             result = self._results.get(request_id)
             if result is None:
@@ -409,7 +412,7 @@ class WorkloadAwareResultTracker:
                 )
                 self._results[request_id] = result
             result.vllm_cached_tokens = max(0, vllm_cached_tokens)
-            self._trace_phase(request_id, "scheduler_seen", result)
+            self._trace_phase(request_id, phase, result)
             return result
 
     def start_lookup(self, request_id: str) -> None:

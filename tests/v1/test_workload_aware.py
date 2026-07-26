@@ -193,6 +193,22 @@ def test_adapter_skip_avoids_lookup_and_force_bypasses_global_threshold() -> Non
     assert per_request.get_num_new_matched_tokens(request("auto", 64), 0) == 128
 
 
+def test_adapter_emits_distinct_enqueue_and_seen_once(tmp_path) -> None:
+    path = tmp_path / "scheduler-lifecycle.jsonl"
+    instance = connector(0)
+    instance._workload_aware_results = WorkloadAwareResultTracker(trace_path=path)
+    req = request("skip")
+    req.num_computed_tokens = 0
+
+    instance.on_new_request(req)
+    instance.get_num_new_matched_tokens(req, 0)
+    instance._workload_aware_results.close()
+
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert [row["phase"] for row in rows].count("scheduler_enqueued") == 1
+    assert [row["phase"] for row in rows].count("scheduler_seen") == 1
+
+
 def test_actual_retrieve_trace_distinguishes_l1_and_l2(tmp_path, monkeypatch) -> None:
     path = tmp_path / "actual.jsonl"
     monkeypatch.setenv("LMCACHE_WORKLOAD_AWARE_ACTUAL_TRACE_PATH", str(path))
