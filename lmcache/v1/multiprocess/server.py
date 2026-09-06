@@ -57,6 +57,7 @@ from lmcache.v1.multiprocess.modules.lmcache_driven_transfer import (
 from lmcache.v1.multiprocess.modules.lookup import LookupModule
 from lmcache.v1.multiprocess.modules.management import ManagementModule
 from lmcache.v1.multiprocess.modules.p2p_controller import P2PController
+from lmcache.v1.multiprocess.protocols import RequestType
 from lmcache.v1.multiprocess.transport.base import RequestServer
 from lmcache.v1.multiprocess.transport.server_factory import create_request_server
 from lmcache.v1.platform.base.cache_context import BaseCacheContext
@@ -198,6 +199,14 @@ def _build_modules(
         for m in transfer_modules
         if isinstance(m, (LMCacheDrivenTransferModule, EngineDrivenTransferModule))
     ]
+    registration_targets: dict[RequestType, InstanceLivenessTarget] = {}
+    for module in liveness_targets:
+        if isinstance(module, LMCacheDrivenTransferModule):
+            registration_targets[RequestType.REGISTER_KV_CACHE] = module
+        elif isinstance(module, EngineDrivenTransferModule):
+            registration_targets[
+                RequestType.REGISTER_KV_CACHE_ENGINE_DRIVEN_CONTEXT
+            ] = module
     blend_module: EngineModule | None = None
     mirror_state_owner: InstanceLivenessTarget | None = None
     if mp_config.engine_type == "blend":
@@ -274,6 +283,7 @@ def _build_modules(
     management = ManagementModule(
         ctx,
         liveness_targets=liveness_targets,
+        registration_targets=registration_targets,
         mirror_state_owner=mirror_state_owner,
         worker_reap_timeout_seconds=mp_config.worker_reap_timeout_seconds,
         worker_registration_grace_seconds=mp_config.worker_registration_grace_seconds,

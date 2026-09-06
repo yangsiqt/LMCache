@@ -156,6 +156,14 @@ def grpc_client() -> Iterator[tuple[GrpcMultiprocessClient, _Calls]]:
         def ping(self, instance_id: int | None) -> bool:
             return instance_id == 7
 
+        @request_handler(RequestType.PING_REGISTERED, HandlerType.BLOCKING)
+        def ping_registered(
+            self, instance_id: int, registration_type: RequestType
+        ) -> bool:
+            return (
+                instance_id == 7 and registration_type is RequestType.REGISTER_KV_CACHE
+            )
+
         @request_handler(RequestType.CLEAR, HandlerType.BLOCKING)
         def clear(self, force: bool = False) -> None:
             calls.clear_force = force
@@ -262,6 +270,17 @@ def test_rpc_surface_is_derived_from_split_service_descriptors() -> None:
     assert clear_codec.request_decoder(
         clear_codec.request_encoder((), {"force": True})
     ) == (True,)
+
+    ping_registered_codec = registry.by_full_name[
+        "lmcache.mp.ControllerService.PingRegistered"
+    ]
+    ping_registered_request = ping_registered_codec.request_encoder(
+        (7, RequestType.REGISTER_KV_CACHE), {}
+    )
+    assert ping_registered_codec.request_decoder(ping_registered_request) == (
+        7,
+        RequestType.REGISTER_KV_CACHE,
+    )
 
     registration_codec = registry.by_full_name[
         "lmcache.mp.EngineDrivenService.RegisterKvCacheEngineDrivenContext"
@@ -506,6 +525,7 @@ def test_generated_grpc_services_communicate_end_to_end(
     ).result(5)
     assert registration == RegisterEngineDrivenContextResponse("shared-memory", 4096)
     assert client.ping(7).result(5) is True
+    assert client.ping_registered(7, RequestType.REGISTER_KV_CACHE).result(5) is True
     assert client.clear().result(5) is None
     assert calls.clear_force is False
     assert client.clear(force=True).result(5) is None

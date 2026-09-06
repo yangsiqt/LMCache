@@ -90,8 +90,11 @@ class RequestType(enum.Enum):
     GET_EXPERIMENTAL = enum.auto()
 
     CB_PROTOCOL_HANDSHAKE = enum.auto()
+    # Internal vLLM registration-aware heartbeat; append to preserve values.
+    PING_REGISTERED = enum.auto()
 
-    # Deprecated aliases.
+    # Deprecated aliases must follow every auto-valued member. On Python 3.10,
+    # placing aliases before auto() can reuse the preceding member's value.
     CB_REGISTER_ROPE_V3 = CB_REGISTER_ROPE
     CB_UNREGISTER_ROPE_V3 = CB_UNREGISTER_ROPE
     CB_RETRIEVE_PRE_COMPUTED_V3 = CB_RETRIEVE_PRE_COMPUTED

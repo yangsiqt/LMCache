@@ -10,7 +10,7 @@ protocols/
 ├── __init__.py         # Protocol initialization and registration
 ├── base.py             # Common types (HandlerType, ProtocolDefinition, RequestType)
 ├── engine.py           # Engine operations (REGISTER/UNREGISTER, STORE, RETRIEVE, LOOKUP, PREPARE/COMMIT, ...)
-├── controller.py       # Controller operations (CLEAR, GET_CHUNK_SIZE, PING)
+├── controller.py       # Controller operations (CLEAR, GET_CHUNK_SIZE, PING, PING_REGISTERED)
 ├── debug.py            # Debug operations (NOOP)
 ├── blend.py            # CacheBlend rope + unified lookup + retrieve (CB_REGISTER_ROPE, CB_UNREGISTER_ROPE, CB_RETRIEVE_PRE_COMPUTED, CB_UNIFIED_LOOKUP)
 ├── observability.py    # Observability events (REPORT_BLOCK_ALLOCATION)
@@ -72,7 +72,7 @@ If your operation fits an existing category (engine / controller / debug / blend
            # ... existing definitions ...
            "YOUR_NEW_OP": ProtocolDefinition(
                payload_classes=[int, str],  # Your payload types
-               response_class=bool,          # Your response type
+               response_class=bool,  # Your response type
                handler_type=HandlerType.SYNC,  # or BLOCKING
            ),
        }
@@ -99,17 +99,19 @@ If you're adding a new category of operations:
    # SPDX-License-Identifier: Apache-2.0
    """
    Monitoring protocol definitions.
-   
+
    This module defines protocols for:
    - HEALTH_CHECK: Check server health status
    - GET_STATS: Get cache statistics
    """
+
    from lmcache.v1.multiprocess.protocols.base import ProtocolDefinition, HandlerType
 
    REQUEST_NAMES = [
        "HEALTH_CHECK",
        "GET_STATS",
    ]
+
 
    def get_protocol_definitions() -> dict[str, ProtocolDefinition]:
        return {
@@ -212,6 +214,7 @@ Cache management and configuration:
 - `CLEAR`: Clear server caches (payload: `force`, defaults to `False` in clients)
 - `GET_CHUNK_SIZE`: Get the chunk size configuration
 - `PING`: Liveness / worker probe (payload: sender's worker instance id or `None`)
+- `PING_REGISTERED`: Internal worker probe that checks the primary KV registration
 
 ### Debug Operations (`debug.py`)
 Testing and monitoring:
