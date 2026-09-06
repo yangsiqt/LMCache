@@ -149,6 +149,23 @@ def _compile_scalar_codec(
                 return dtype
 
             return encode_dtype, decode_dtype
+    if field.type in (
+        field.TYPE_INT32,
+        field.TYPE_INT64,
+        field.TYPE_SINT32,
+        field.TYPE_SINT64,
+        field.TYPE_SFIXED32,
+        field.TYPE_SFIXED64,
+        field.TYPE_UINT32,
+        field.TYPE_UINT64,
+        field.TYPE_FIXED32,
+        field.TYPE_FIXED64,
+    ) and _is_enum_type(py_type):
+
+        def encode_numeric_enum(value: Any) -> int:
+            return int(value.value)
+
+        return encode_numeric_enum, py_type
     if py_type in (bool, int, float, str, bytes):
         return py_type, py_type
     return _identity, _identity

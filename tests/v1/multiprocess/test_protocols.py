@@ -2,6 +2,7 @@
 """Tests for the multiprocess protocol registry (``RequestType`` + definitions)."""
 
 # Third Party
+import msgspec
 import pytest
 
 # First Party
@@ -50,6 +51,7 @@ FROZEN_WIRE_IDS = {
     "P2P_UNLOCK_OBJECTS": 31,
     "GET_EXPERIMENTAL": 32,
     "CB_PROTOCOL_HANDSHAKE": 33,
+    "PING_REGISTERED": 34,
 }
 
 CB_REQUESTS = [
@@ -93,6 +95,21 @@ def test_clear_protocol_carries_optional_force_flag() -> None:
     assert definition.response_class is None
 
 
+def test_registration_aware_ping_protocol_is_registered() -> None:
+    definitions = initialize_protocols()
+    request_type = RequestType.PING_REGISTERED
+
+    definition = definitions[request_type]
+    assert definition.payload_classes == [int, RequestType]
+    assert definition.response_class is bool
+
+
+def test_registration_type_round_trips_on_the_wire() -> None:
+    registration_type = RequestType.REGISTER_KV_CACHE
+    encoded = msgspec.msgpack.encode(registration_type)
+    assert msgspec.msgpack.decode(encoded, type=RequestType) is registration_type
+
+
 def test_blend_requests_are_registered() -> None:
     definitions = initialize_protocols()
     for name in CB_REQUESTS:
@@ -133,6 +150,7 @@ def test_handshake_response() -> None:
         "P2P_QUERY_LOOKUP_RESULTS",
         "P2P_UNLOCK_OBJECTS",
         "GET_EXPERIMENTAL",
+        "PING_REGISTERED",
     ],
 )
 def test_compatibility_aliases_do_not_reuse_later_auto_values(name: str) -> None:
