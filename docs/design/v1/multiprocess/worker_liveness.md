@@ -176,14 +176,19 @@ T1        health_event is cleared; recover callback re-registers the same
 ```
 
 The same callback still handles a full server outage. If all Contexts survived,
-the idempotent register path refreshes `last_seen` and builds nothing.
+the idempotent server register path only refreshes `last_seen`. Locally, the
+worker initializes a candidate Context before publishing it, then closes the
+previous Context under the same lifecycle lock used by requests. Async close
+drains background Store work before releasing SHM. Failed cleanup retains one
+pending Context, keeps the worker unhealthy, and is retried before new allocation.
 
 ### 6.3 Shutdown
 
-`shutdown()` stops the heartbeat before sending UNREGISTER, so no stray ping
-lands on a closing client. The heartbeat cycle skips the recover callback and
-`health_event.set()` once stopped, and the callback skips re-registration when a
-stop is already requested — a straggling cycle cannot re-create a ghost context.
+`shutdown()` marks the adapter closing and clears health, stops the heartbeat
+without holding the lifecycle lock, then acquires that lock before UNREGISTER
+and local cleanup. A limited heartbeat join is not a synchronization guarantee:
+the closing check prevents late publication, and the lifecycle lock serializes
+in-flight registration with UNREGISTER. Heartbeat checks stop again after recovery.
 
 ## 7. Failure Modes
 
